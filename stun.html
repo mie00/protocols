@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Styled Page</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-white shadow-md py-4 px-6 flex justify-between items-center">
+        <h1 class="text-xl font-semibold text-gray-800">Video Call App</h1>
+        <button id='hangup' class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md">Hang Up</button>
+    </header>
+
+    <!-- Main Content - Video Call Area and Controls -->
+    <main class="flex-1 flex">
+        <!-- Video Call Area -->
+        <div id="media" class="flex-1 relative bg-black">
+            <!-- Placeholder for video streams -->
+            <!-- You would typically use a library like Twilio Video SDK or similar to manage video streams -->
+        </div>
+
+        <!-- Controls Panel -->
+        <div class="w-1/4 bg-gray-200 p-4 flex flex-col space-y-4">
+            <!-- Participants -->
+            <div class="flex items-center space-x-2">
+                <div class="bg-gray-400 rounded-full h-4 w-4"></div> <!-- Participant indicator -->
+                <p id="stat" class="text-sm font-medium text-gray-700"></p>
+            </div>
+            <!-- End Participants -->
+
+			<div class="flex flex-col space-y-2">
+				Stun server <input id="stun-servers" type="text" placeholder="Stun servers" class="flex-1 border border-gray-300 px-3 py-2 rounded-md" value="stun.l.google.com:19302">
+			</div>
+            <!-- On/Off Buttons -->
+            <div class="flex flex-col space-y-2">
+                <button id="toggle-video" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">Toggle Video</button>
+                <button id="toggle-audio" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">Toggle Audio</button>
+                <button id="toggle-screen" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">Share Screen</button>
+            </div>
+            <!-- End On/Off Buttons -->
+
+            <!-- Chat Panel -->
+            <div class="flex-1 flex flex-col border-t border-gray-300 pt-4">
+                <!-- Messages Area -->
+                <div id="output" class="flex-1 overflow-y-auto px-4">
+                </div>
+
+                <!-- Message Input and Upload Button -->
+                <div class="flex items-center space-x-2 p-2">
+                    <input id="chat" type="text" placeholder="Type your message..." class="flex-1 border border-gray-300 px-3 py-2 rounded-md">
+                    <!-- <button class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">Send</button> -->
+                <div class="p-2">
+                    <label for="file-upload" class="cursor-pointer bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">📎</label>
+                    <input id="file-upload" type="file" class="hidden">
+                </div>
+                </div>
+            </div>
+            <!-- End Chat Panel -->
+        </div>
+        <!-- End Controls Panel -->
+    </main>
+
+    <!-- Overlay for Copying String -->
+    <div id="copy-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 hidden">
+        <div class="bg-white p-4 rounded-md shadow-md text-center">
+			<div id="qrcode"></div>
+            <button id="scan-button" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md mt-2 hidden">Scan</button>
+            <p class="text-lg font-semibold mb-2">Copy this:</p>
+            <textarea readonly id="copy-text" class="bg-gray-200 px-4 py-2 rounded-md break-all block"></textarea>
+            <button id="copy-button" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md mt-2">Copy</button>
+            <textarea id="copy-text-2" class="bg-gray-200 px-4 py-2 rounded-md break-all block hidden"></textarea>
+            <button id="copy-button-2" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md mt-2 hidden">Accept</button>
+        </div>
+    </div>
+
+	<script>
+		// function toggleSettings() {
+        //     const settingsPanel = document.getElementById('settingsPanel');
+        //     settingsPanel.classList.toggle('hidden');
+        // }
+		// const output = document.getElementById('output');
+		const app = {streams: {}, config: {}, viewStreams: {}};
+        // const handshakeSection = document.getElementById('handshake');
+
+		document.getElementById('hangup').addEventListener('click', () => {
+			if (app.pc) {
+				app.pc.close();
+				app.pc = null;
+			}
+			windowLoader();
+		})
+
+
+		function updateProgressBar(id, file_size, get_ready) {
+			const bufferedAmount = get_ready();
+
+			// Calculate progress percentage (0 to 100)
+			const progressPercentage = (file_size - bufferedAmount) / file_size * 100;
+			console.log("FASD", progressPercentage, id, file_size, bufferedAmount);
+			const elem = document.getElementById(`file-${id}`);
+			elem.value = progressPercentage;
+			elem.innerHTML = `${progressPercentage}%`
+		}
+
+		document.getElementById('toggle-audio').addEventListener('click', async (ev) => {
+			app.config.audio = !app.config.audio;
+			const to_remove = app.config.audio?'bg-blue-500':'bg-gray-500';
+			const to_add = app.config.audio?'bg-gray-500':'bg-blue-500';
+			ev.target.classList.remove(to_remove);
+			ev.target.classList.add(to_add);
+			await setupLocalStream('audio');
+		});
+
+		document.getElementById('toggle-video').addEventListener('click', async (ev) => {
+			app.config.video = !app.config.video;
+			const to_remove = app.config.video?'bg-blue-500':'bg-gray-500';
+			const to_add = app.config.video?'bg-gray-500':'bg-blue-500';
+			ev.target.classList.remove(to_remove);
+			ev.target.classList.add(to_add);
+			await setupLocalStream('video');
+		});
+		
+		document.getElementById('toggle-screen').addEventListener('click', async (ev) => {
+			app.config.screen = !app.config.screen;
+			const to_remove = app.config.screen?'bg-blue-500':'bg-gray-500';
+			const to_add = app.config.screen?'bg-gray-500':'bg-blue-500';
+			ev.target.classList.remove(to_remove);
+			ev.target.classList.add(to_add);
+			await setupLocalStream('screen');
+		});
+
+		const setupLocalStream = async (changed) => {
+			if (app.streams[changed]) {
+				const elem = document.getElementById(`stream-${app.streams[changed].id}`);
+				if (elem) {
+					elem.srcObject = null;
+					elem.remove();
+				}
+				delete app.viewStreams[app.streams[changed].id];
+				app.streams[changed].getTracks().forEach(function(track) {
+					track.stop();
+					track.dispatchEvent(new Event("ended"));
+				});
+			}
+			let stream;
+			if (changed === 'audio') {
+				if (app.config.audio) {
+					stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+					if (app.pc) {
+						stream.getTracks().forEach((track) => {
+							app.pc.addTrack(track, stream);
+						});
+					}
+				}
+			} else if (changed === 'video') {
+				if (app.config.video) {
+					stream = await navigator.mediaDevices.getUserMedia({ video: true });
+					if (app.pc) {
+						stream.getTracks().forEach((track) => {
+							app.pc.addTrack(track, stream);
+						});
+					}
+				}
+			} else {
+				if (app.config.screen) {
+					stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: {cursor: "always"}});
+					if (app.pc) {
+						stream.getTracks().forEach((track) => {
+							app.pc.addTrack(track, stream);
+						});
+					}
+				}
+			}
+			if (stream) {
+				app.streams[changed] = stream;
+				if ((changed === 'video' && app.config.video) || (changed === 'screen' && app.config.screen)) {
+					let mediaElement = document.createElement('video');
+					document.getElementById('media').appendChild(mediaElement);
+					mediaElement.id = `stream-${stream.id}`
+					mediaElement.srcObject = stream;
+					mediaElement.muted = true;
+					mediaElement.autoplay = true;
+					mediaElement.classList.add('w-full')
+				}
+				app.viewStreams[stream.id] = stream;
+			}
+			
+			// let mediaElement = document.getElementById(`local-${changed}`);
+			// if ((changed === 'video' && app.config.video) || (changed === 'screen' && app.config.screen)) {
+			// 	if (!mediaElement) {
+			// 		mediaElement = document.createElement((changed === 'video' && app.config.video) || (changed === 'screen' && app.config.screen)?'video':'audio')
+			// 		document.getElementById('media').appendChild(mediaElement);
+			// 	}
+			// 	mediaElement.id = `local-${changed}`
+			// 	mediaElement.srcObject = app.streams[changed];
+			// 	mediaElement.muted = true;
+			// 	mediaElement.autoplay = true;
+			// } else if (mediaElement) {
+			// 	mediaElement.remove();
+			// }
+		}
+
+		// let localStream;
+
+		// async function initMedia() {
+		// 	if (localStream) {
+		// 		localStream.getTracks().forEach(function(track) {
+		// 			track.stop();
+		// 		});
+		// 	}
+		// 	if (app.stream_type == 'audio' || app.stream_type == 'video') {
+		// 		localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: app.stream_type == 'video' });
+		// 		const localPlayer = document.getElementById('video1');
+		// 		localPlayer.srcObject = localStream;
+		// 		localPlayer.muted = true;
+		// 		localPlayer.onloadedmetadata = () => {
+		// 			localPlayer.play();
+		// 		};
+		// 		localPlayer.height = localPlayer.clientHeight.toString() + 'px';
+		// 	} else if (app.stream_type == 'screen') {
+		// 		localStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: {cursor: "always"} });
+		// 		const localPlayer = document.getElementById('video1');
+		// 		localPlayer.srcObject = localStream;
+		// 		localPlayer.muted = true;
+		// 		localPlayer.onloadedmetadata = () => {
+		// 			localPlayer.play();
+		// 		};
+		// 		localPlayer.height = localPlayer.clientHeight.toString() + 'px';
+		// 	} else {
+		// 		localStream = null;
+		// 	}
+
+		// 	if (localStream && app.pc) {
+		// 		console.log("ASDASDASDASDASD")
+		// 		localStream.getTracks().forEach((track) => {
+		// 			app.pc.addTrack(track, localStream);
+		// 		});
+		// 	}
+		// }
+
+		// // Add event listener to detect changes on the select element
+		// document.getElementById('mediaType').addEventListener('change', async function() {
+		// 	app.stream_type = this.value;
+		// 	await initMedia();
+		// });
+
+		const baseName = localStorage.getItem('basename') || window.location.origin + window.location.pathname;
+		console.log(baseName)
+
+		async function init() {
+			const config = {
+				iceServers: document.getElementById("stun-servers").value.split(',').filter(link => link).map(link => ({urls: "stun:" + link})),
+			};
+
+			const pc = new RTCPeerConnection(config);
+			app.pc = pc;
+			const nego_dc = pc.createDataChannel("nego", {
+				negotiated: true,
+				id: 0
+			});
+			app.nego_dc = nego_dc;
+			nego_dc.onopen = () => {
+				// handshakeSection.classList.add('hidden');
+				document.getElementById("copy-overlay").classList.add('hidden');
+				history.pushState('', '', baseName)
+			};
+			nego_dc.onclose = () => {
+				windowLoader();
+			}
+
+			// if (localStream && app.pc) {
+			// 	localStream.getTracks().forEach((track) => {
+			// 		console.log("tracks", track)
+			// 		app.pc.addTrack(track, localStream);
+			// 	});
+			// }
+
+			app.pc.addEventListener("track", (ev) => {
+				let mediaElement = document.createElement(ev.track.kind);
+				document.getElementById('media').appendChild(mediaElement);
+				mediaElement.id = `stream-${ev.streams[0].id}`;
+				mediaElement.srcObject = ev.streams[0];
+				mediaElement.muted = false;
+				mediaElement.autoplay = true;
+				mediaElement.classList.add('w-full')
+				app.viewStreams[ev.streams[0].id] = ev.streams[0];
+				ev.track.onended = (ev) => {
+					console.log(ev);
+					document.getElementById(`stream-${ev.streams[changed].id}`).remove();
+					delete app.viewStreams[ev.streams[changed].id];
+				}
+				// const video = document.getElementById('video2');
+				// video.srcObject = ev.streams[0];
+
+				// video.onloadedmetadata = () => {
+				// 	video.play();
+				// };
+			})
+
+			nego_dc.onmessage = async e => {
+				const data = JSON.parse(e.data);
+				pc.setRemoteDescription(data);
+				if (data.type === "offer") {
+					await pc.setLocalDescription();
+					nego_dc.send(JSON.stringify(pc.localDescription));
+				}
+			};
+			if (true) {
+				const dc = pc.createDataChannel("chat", {
+					negotiated: true,
+					id: 1
+				});
+				app.dc = dc;
+				dc.onopen = () => {
+					chat.select();
+				};
+				dc.onmessage = e => log(`> ${e.data}`);
+				pc.oniceconnectionstatechange = e => log(pc.iceConnectionState);
+
+				pc.onconnectionstatechange = ev => handleChange();
+				pc.oniceconnectionstatechange = ev => handleChange();
+
+				const dc_file = pc.createDataChannel("file", {
+					negotiated: true,
+					id: 2
+				});
+				app.dc_file = dc_file;
+
+				dc_file.onmessage = e => {
+					console.log(e)
+					if (!app.file_stuff) {
+						const id = Math.random().toString(16).slice(2);
+						app.file_stuff = JSON.parse(e.data);
+						app.file_stuff.segments = [];
+						app.file_stuff.remaining_size = app.file_stuff.size;
+						app.file_stuff.id = id;
+						log(`> <label for="file-${id}">${app.file_stuff.name}</label> <span id="f-${id}"><progress id="file-${id}" value="0" max="100"> 0% </progress></span>`)
+						return
+					}
+					app.file_stuff.segments.push(e.data);
+					app.file_stuff.remaining_size -= e.data.byteLength || e.data.size;
+					updateProgressBar(app.file_stuff.id, app.file_stuff.size, () => app.file_stuff.remaining_size);
+					if (app.file_stuff.remaining_size === 0) {
+						const blob = new Blob(app.file_stuff.segments, { type: app.file_stuff.type });
+						const url = URL.createObjectURL(blob);
+						document.getElementById(`f-${app.file_stuff.id}`).innerHTML = `
+							<a id="download-${app.file_stuff.id}" class="w-full py-2 px-4 bg-blue-500 text-white rounded shadow hover:bg-blue-700">Download</a>
+							<a id="view-${app.file_stuff.id}" class="w-full py-2 px-4 bg-blue-500 text-white rounded shadow hover:bg-blue-700" target="_blank">View</a>`;
+						const a = document.getElementById(`download-${app.file_stuff.id}`);
+						a.href = url;
+						a.download = app.file_stuff.name;
+						const aview = document.getElementById(`view-${app.file_stuff.id}`)
+						aview.href = url;
+						app.file_stuff = null;
+					}
+				};
+			}
+
+		}
+		const log = msg => output.innerHTML += `<br>${msg}`;
+		chat.onkeypress = function (e) {
+			if (e.keyCode != 13) return;
+			app.dc.send(chat.value);
+			log(chat.value);
+			chat.value = "";
+		};
+
+		async function getOffer(cb) {
+			await init();
+			await app.pc.setLocalDescription(await app.pc.createOffer());
+
+			app.pc.onnegotiationneeded = async function() {
+				const offer = await app.pc.createOffer()
+				await app.pc.setLocalDescription(offer);
+				app.nego_dc.send(JSON.stringify(offer));
+			};
+			app.pc.onicecandidate = async ({
+				candidate
+			}) => {
+				console.log('Candidate found', candidate)
+				// if (!candidate || candidate.type !== 'srflx') return;
+				await cb(app.pc.localDescription.sdp);
+			};
+		}
+
+		// async function createOffer() {
+		// 	button.disabled = true;
+		// 	await getOffer((sdp) => {
+		// 		offer.value = sdp;
+		// 		offer.select();
+		// 		answer.placeholder = "Paste answer here. And Press Enter";
+		// 	})
+		// }
+
+		async function getAnswer(offer, cb) {
+			await init();
+			await app.pc.setRemoteDescription({
+				type: "offer",
+				sdp: offer.trim() + '\n'
+			});
+			await app.pc.setLocalDescription(await app.pc.createAnswer());
+
+			app.pc.onnegotiationneeded = async function() {
+				const offer = await app.pc.createOffer()
+				await app.pc.setLocalDescription(offer);
+				app.nego_dc.send(JSON.stringify(offer));
+			};
+			app.pc.onicecandidate = async ({
+				candidate
+			}) => {
+				console.log(candidate)
+				// if (!candidate || candidate.type !== 'srflx') return;
+				await cb(app.pc.localDescription.sdp)
+			};
+		}
+
+		// offer.onkeypress = async function (e) {
+		// 	if (e.keyCode != 13) return;
+		// 	button.disabled = offer.disabled = true;
+			
+		// 	await getAnswer(offer.value, (sdp) => {
+		// 		answer.focus();
+		// 		answer.value = sdp;
+		// 		answer.select();
+		// 	});
+		// };
+
+		// answer.onkeypress = function (e) {
+		// 	if (e.keyCode != 13 || app.pc.signalingState != "have-local-offer") return;
+		// 	answer.disabled = true;
+		// 	app.pc.setRemoteDescription({
+		// 		type: "answer",
+		// 		sdp: answer.value.trim() + '\n'
+		// 	});
+		// };
+
+
+		function handleChange() {
+			let stat = 'ConnectionState: <strong>' + app.pc?.connectionState + '</strong> IceConnectionState: <strong>' + app.pc?.iceConnectionState + '</strong>';
+			document.getElementById('stat').innerHTML = stat;
+			console.log('%c' + new Date().toISOString() + ': ConnectionState: %c' + app.pc?.connectionState + ' %cIceConnectionState: %c' + app.pc?.iceConnectionState,
+				'color:yellow', 'color:orange', 'color:yellow', 'color:orange');
+		}
+		handleChange();
+
+
+
+
+
+
+
+		document.getElementById('file-upload').addEventListener('change', handleFileSelect);
+		// document.getElementById('dropArea').addEventListener('dragover', handleDragOver);
+		// document.getElementById('dropArea').addEventListener('drop', handleFileDrop);
+
+		function handleFileSelect(event) {
+			const file = event.target.files[0];
+			readFile(file);
+		}
+
+		// function handleDragOver(event) {
+		// 	event.preventDefault();
+		// 	event.stopPropagation();
+		// 	event.dataTransfer.dropEffect = 'copy';
+		// }
+
+		// function handleFileDrop(event) {
+		// 	event.preventDefault();
+		// 	event.stopPropagation();
+		// 	const file = event.dataTransfer.files[0];
+		// 	readFile(file);
+		// }
+		function splitArrayBuffer(arrayBuffer, chunkSize) {
+			const uint8Array = new Uint8Array(arrayBuffer);
+			const chunks = [];
+			let offset = 0;
+
+			while (offset < uint8Array.length) {
+				const chunk = uint8Array.slice(offset, offset + chunkSize);
+				chunks.push(chunk.buffer);  // Push the ArrayBuffer of the chunk
+				offset += chunkSize;
+			}
+
+			return chunks;
+		}
+
+		function readFile(file) {
+			const id = Math.random().toString(16).slice(2);
+			log(`<label for="file-${id}">${file.name}</label> <span id="f-${id}"><progress id="file-${id}" value="0" max="100"> 0% </progress></span>`)
+			let offset = 0;
+			const max_size = 2*1024*1024;
+			var sent_header = false;
+			const reader = new FileReader();
+			reader.onload = function(event) {
+				if (!sent_header) {
+					app.dc_file.send(JSON.stringify({name: file.name, type: file.type, size: file.size}));
+					sent_header = true;
+				}
+				for (var chunk of splitArrayBuffer(event.target.result, 128*1024)) {
+					app.dc_file.send(chunk);
+				}
+				if (app.file_progress_interval) {
+					clearInterval(app.file_progress_interval);
+					app.file_progress_interval = null;
+				}
+				app.file_progress_interval = setInterval(() => {
+					const getRemaining = () => ((app.dc_file.bufferedAmount || 0) + (file.size - Math.min(offset, file.size)));
+					updateProgressBar(id, file.size, getRemaining);
+					if (getRemaining() == 0) {
+						clearInterval(app.file_progress_interval);
+						app.file_progress_interval = null;
+						document.getElementById(`f-${id}`).innerHTML = "Sent";
+					}
+				}, 100);
+			};
+			var buffer_cb = (event) => {
+				reader.readAsArrayBuffer(file.slice(offset, offset+max_size));
+				offset += max_size;
+				if (offset > file.size) {
+					app.dc_file.removeEventListener("bufferedamountlow", buffer_cb);
+					document.getElementById('file-upload').disabled = false;
+				}
+			};
+			if (file.size > max_size) {
+				document.getElementById('file-upload').disabled = true;
+				app.dc_file.addEventListener("bufferedamountlow", buffer_cb);
+			}
+			reader.readAsArrayBuffer(file.slice(offset, offset+max_size));
+			offset += max_size;
+		}
+
+		// // copied from https://gist.github.com/Explosion-Scratch/357c2eebd8254f8ea5548b0e6ac7a61b
+		// async function compress(string, encoding) {
+		// 	const byteArray = new TextEncoder().encode(string);
+		// 	const cs = new CompressionStream(encoding);
+		// 	const writer = cs.writable.getWriter();
+		// 	writer.write(byteArray);
+		// 	writer.close();
+		// 	const compressed = await new Response(cs.readable).arrayBuffer();
+		// 	return btoa(String.fromCharCode(...new Uint8Array(compressed)));
+		// }
+
+		// async function decompress(byteArray, encoding) {
+		// 	const compressedBuffer = Uint8Array.from(atob(byteArray), c => c.charCodeAt(0));
+		// 	const cs = new DecompressionStream(encoding);
+		// 	const writer = cs.writable.getWriter();
+		// 	writer.write(compressedBuffer);
+		// 	writer.close();
+		// 	console.log("ZZZZZZZZZAS", atob(byteArray));
+		// 	const arrayBuffer = await (new Response(cs.readable).arrayBuffer());
+		// 	console.log("ZZZZZZZZZAS");
+		// 	return new TextDecoder().decode(arrayBuffer);
+		// }
+		const windowLoader = async () => {
+			const urlParams = new URLSearchParams(window.location.search);
+			window.removeEventListener("load", windowLoader);
+			if (!urlParams.get('offer')) {
+				const now = Date.now();
+				await getOffer(async (sdp) => {
+					if (Date.now() - now > 3 * 1000) { return }
+					const link = document.getElementById('copy-text');
+					document.getElementById('copy-overlay').classList.remove('hidden');
+					const compressed = await compress(sdp, "gzip");
+					urlParams.set('offer', compressed);
+					document.getElementById("qrcode").innerHTML = '';
+					new QRCode(document.getElementById("qrcode"), baseName + '?' +  urlParams.toString());
+					// window.history.pushState("", "", '?' +  urlParams.toString());
+					link.innerHTML = baseName + '?' +  urlParams.toString();
+					const btn = document.getElementById("copy-button");
+					btn.innerHTML = "Copy";
+					btn.addEventListener("click", async (ev) => {
+						if (navigator.clipboard) {
+							await navigator.clipboard.writeText(link.innerHTML);
+							btn.innerHTML = "Copied successfully";
+						} else {
+							btn.innerHTML = "Error copying, please copy manually";
+						}
+					})
+					const btn2 = document.getElementById("copy-button-2");
+					const link2 = document.getElementById('copy-text-2');
+					link2.value = '';
+					btn2.classList.remove('hidden');
+					link2.classList.remove('hidden');
+					btn2.addEventListener("click", async (ev) => {
+						let data = link2.value;
+						// if (data.indexOf('?') != -1) {
+						// 	data = new URLSearchParams(new URL(data).search).get('answer');
+						// }
+						const answer = await decompress(data.trim(), "gzip");
+						app.pc.setRemoteDescription({
+							type: "answer",
+							sdp: answer.trim() + '\n'
+						});
+					})
+					const bc = new BroadcastChannel("manual_rtc");
+					app.bc = bc;
+					bc.onmessage = async (event) => {
+						let data = event.data;
+						const answer = await decompress(data.trim(), "gzip");
+						app.pc.setRemoteDescription({
+							type: "answer",
+							sdp: answer.trim() + '\n'
+						});
+					};
+					document.getElementById('scan-button').classList.remove('hidden');
+
+					async function tick(video, canvasElement, stream) {
+						const canvas = canvasElement.getContext("2d");
+						if (video.readyState === video.HAVE_ENOUGH_DATA) {
+							canvasElement.height = video.videoHeight;
+							canvasElement.width = video.videoWidth;
+							canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+							var imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+							var code = jsQR(imageData.data, imageData.width, imageData.height, {
+								inversionAttempts: "dontInvert",
+							});
+							if (code && code.data) {
+								let data = code.data;
+								if (data.indexOf('?') != -1) {
+									data = new URLSearchParams(new URL(data).search).get('answer');
+								}
+								const answer = await decompress(data.trim(), "gzip");
+								console.log("got answer", answer);
+								app.pc.setRemoteDescription({
+									type: "answer",
+									sdp: answer.trim() + '\n'
+								});
+								stream.getTracks().forEach(function(track) {
+									track.stop();
+								});
+								video.remove();
+							} else {
+								requestAnimationFrame(tick.bind(null, video, canvasElement, stream));
+							}
+						} else {
+							requestAnimationFrame(tick.bind(null, video, canvasElement, stream));
+						}
+					}
+					document.getElementById('scan-button').addEventListener('click', async () => {	
+						const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+						let mediaElement = document.createElement('video');
+						mediaElement.srcObject = stream;
+						mediaElement.muted = true;
+						mediaElement.autoplay = true;
+						mediaElement.play();
+						mediaElement.setAttribute("playsinline", true);
+						let canvas = document.createElement('canvas');
+						document.getElementById("qrcode").innerHTML = '';
+						document.getElementById('qrcode').appendChild(canvas);
+
+
+						requestAnimationFrame(tick.bind(null, mediaElement, canvas, stream));
+
+					})
+				});
+			} else if (urlParams.get('answer')) {
+				console.log("ASDDS")
+				const bc = new BroadcastChannel("manual_rtc");
+				await bc.postMessage(urlParams.get('answer'));
+				bc.close();
+				document.getElementById('copy-overlay').classList.remove('hidden');
+				document.getElementById('copy-overlay').innerHTML = '<p class="bg-white p-4 rounded-md shadow-md text-center">call started on another tab, please close this one</p>';
+			} else {
+				const now = Date.now();
+				const offer = await decompress(urlParams.get('offer'), "gzip");
+				await getAnswer(offer, async (sdp) => {
+					if (Date.now() - now > 3 * 1000) { return }
+					console.log(sdp)
+					const link = document.getElementById('copy-text');
+					document.getElementById('copy-overlay').classList.remove('hidden');
+					const compressed = await compress(sdp, "gzip");
+					urlParams.set('answer', compressed);
+					document.getElementById("qrcode").innerHTML = '';
+					new QRCode(document.getElementById("qrcode"), baseName + '?' +  urlParams.toString());
+					link.innerHTML = compressed;
+					const btn = document.getElementById("copy-button");
+					btn.innerHTML = "Copy";
+					btn.addEventListener("click", async (ev) => {
+						if (navigator.clipboard) {
+							await navigator.clipboard.writeText(link.innerHTML);
+							btn.innerHTML = "Copied successfully";
+						} else {
+							btn.innerHTML = "Error copying, please copy manually";
+						}
+					})
+				})
+			}
+		}
+		window.addEventListener("load", windowLoader);
+
+
+	</script>
+	<script src="sdpcompress.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+	<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+</body>
+
+</html>
