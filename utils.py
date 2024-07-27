@@ -5,7 +5,9 @@ class ReaderWrapper:
         self.buffer = initial_value
         self.done = False
         
-    def connect(self):
+    def connect(self, source_port=None):
+        if source_port is not None:
+            self.sock.bind(('0.0.0.0', source_port))
         self.sock.connect((self.host, self.port))
 
     def close(self):
@@ -56,11 +58,18 @@ class ReaderWrapper:
         return out
         
 class SocketReader(ReaderWrapper):
-    def __init__(self, host, port, type='tcp', initial_value=b''):
+    def __init__(self, host, port, type='tcp', initial_value=b'', alpn=['http/1.1']):
         self.host = host
         self.port = port
         t = socket.SOCK_DGRAM if type == 'udp' else socket.SOCK_STREAM
         self.sock = socket.socket(family=socket.AF_INET, type=t)
+        if type == 'tls':
+            import ssl
+            context = ssl._create_default_https_context()
+            context.set_alpn_protocols(['http/1.1'])
+            if context.post_handshake_auth is not None:
+                context.post_handshake_auth = True
+            self.sock = context.wrap_socket(self.sock, server_hostname=host)
         super().__init__()
 
     def _read(self):

@@ -1,4 +1,9 @@
+#!/usr/bin/env python3
+
+failed_any = False
+
 def expect(case, spec, inp, out, **kwargs):
+    global failed_any
     print("testing:", case)
     oe = ie = None
     if not isinstance(inp, Exception):
@@ -12,15 +17,18 @@ def expect(case, spec, inp, out, **kwargs):
             if type(oe) is type(out) and oe.args == out.args:
                 print("\x1b[32m passed construct\x1b[0m")
             else:
+                failed_any = True
                 print("\x1b[31m failed construct\x1b[0m")
                 print("raised", oe)
         elif isinstance(out, Exception):
+            failed_any = True
             print("\x1b[31m failed construct\x1b[0m")
             print("didn't throw")
             print(out)
         elif o == out:
             print("\x1b[32m passed construct\x1b[0m")
         else:
+            failed_any = True
             print("\x1b[31m failed construct\x1b[0m")
             print("values do not match")
             print("expected", out)
@@ -36,21 +44,40 @@ def expect(case, spec, inp, out, **kwargs):
             if type(ie) is type(inp) and ie.args == inp.args:
                 print("\x1b[32m passed match\x1b[0m")
             else:
+                failed_any = True
                 print("\x1b[31m failed match\x1b[0m")
                 print("raised", ie)
         elif isinstance(inp, Exception):
+            failed_any = True
             print("\x1b[31m failed match\x1b[0m")
             print("didn't throw")
             print("expected", inp)
         elif repr(i).replace('\n', '').replace(' ', '') == inp.replace('\n', '').replace(' ', ''):
             if rem == kwargs.get(rem, b''):
                 print("\x1b[32m passed match\x1b[0m")
+                try:
+                    rev = construct(spec, i, **kwargs)
+                    if rev == out:
+                        print("\x1b[32m passed revert\x1b[0m")
+                    else:
+                        failed_any = True
+                        print("\x1b[31m failed revert\x1b[0m")
+                        print("expected", out)
+                        print("got", rev)
+                except Exception as re:
+                    failed_any = True
+                    print("\x1b[31m failed revert\x1b[0m")
+                    if kwargs.get('should_raise', False):
+                        raise
+                    print("raised", re)
             else:
+                failed_any = True
                 print("\x1b[31m failed match\x1b[0m")
                 print(" remainings do not match\x1b[0m")
                 print("expected", kwargs.get(rem, b''))
                 print("got", rem)
         else:
+            failed_any = True
             print("\x1b[31m failed match\x1b[0m")
             print("values do not match\x1b[0m")
             print("expected", inp)
@@ -85,10 +112,22 @@ t_SUFFIX = r'~[a-zA-Z0-9\\]+'
 t_REPETITION = r'\.\.\.'
 t_OR = r'\|'
 t_SIZE = r'\d+[Bb]?'
-t_ignore = ' \t\n'
+
+t_ignore = ' \t'
+
+
+# Define a rule so we can track line numbers
+def t_newline(t):
+    r'\n+'
+    t.lexer.lineno += len(t.value)
+
+# Define a rule for comments
+def t_comment(t):
+    r'\#.*'
+    pass  # No return value. Token discarded
 
 def t_EQUALS(t):
-    r'==(?P<equals_hex>(?:0x)|(?:0b)|)(?P<equals_val>[0-9]+)'
+    r'==(?P<equals_hex>(?:0x)|(?:0b)|)(?P<equals_val>[0-9a-f]+)'
     t.value = int(t.lexer.lexmatch['equals_val'], 16 if t.lexer.lexmatch['equals_hex'] == '0x' else 2 if t.lexer.lexmatch['equals_hex'] == '0b' else 10)
     return t
 
@@ -207,20 +246,20 @@ def encode_num(val, size, type_=None):
             if size is None:
                 size = 8
             elif size != 8:
-                raise RuntimeError("cannot encode {} into size {}".format(type_, size))
+                raise ValueError("cannot encode {} into size {}".format(type_, size))
         elif type_ == 'int16':
             if size is None:
                 size = 16
             elif size != 16:
-                raise RuntimeError("cannot encode {} into size {}".format(type_, size))
+                raise ValueError("cannot encode {} into size {}".format(type_, size))
         elif type_ == 'int32':
             if size is None:
                 size = 32
             elif size != 32:
-                raise RuntimeError("cannot encode {} into size {}".format(type_, size))
+                raise ValueError("cannot encode {} into size {}".format(type_, size))
     else:
         if size is None:
-            raise RuntimeError("cannot encode int with unknown size")
+            raise ValueError("cannot encode int with unknown size")
             
     orig_val = val
     ret = bytearray(b'0' * (size))
@@ -228,23 +267,23 @@ def encode_num(val, size, type_=None):
         ret[i] = ord(b'1') if val % 2 else ord(b'0')
         val //= 2
     if val != 0:
-        raise RuntimeError("number {} doesn't fit into {} bits".format(orig_val, size))
+        raise ValueError("number {} doesn't fit into {} bits".format(orig_val, size))
     return ret
 
 def encode_str(val, size):
     if size is not None:
         if size % 8 != 0:
-            raise RuntimeError("don't know how to encode a string into {} bits".format(size))
+            raise ValueError("don't know how to encode a string into {} bits".format(size))
         if len(val) != size // 8:
-            raise RuntimeError("string {} doesn't fit into {} bytes".format(repr(val), size // 8))
+            raise ValueError("string {} doesn't fit into {} bytes".format(repr(val), size // 8))
     return b''.join(bytes(format(ord(i),'08b'), 'ascii') for i in val)
 
 def encode_bytes(val, size):
     if size is not None:
         if size % 8 != 0:
-            raise RuntimeError("don't know how to encode bytes into {} bits".format(size))
+            raise ValueError("don't know how to encode bytes into {} bits".format(size))
         if len(val) != size // 8:
-            raise RuntimeError("bytes {} doesn't fit into {} bytes".format(repr(val), size // 8))
+            raise ValueError("bytes {} doesn't fit into {} bytes".format(repr(val), size // 8))
     return b''.join(bytes(format(i,'08b'), 'ascii') for i in val)
 
 def encode_ip(val):
@@ -262,8 +301,13 @@ def encode(val, size, type_=None):
         return encode_num(val, size, type_)
     elif isinstance(val, float) and val % 1 == 0:
         return encode_num(int(val), size)
+    elif isinstance(val, Repr):
+        v = str.encode(val._value('bin'))
+        if size is not None and size != len(v):
+            raise ValueError("size do not match value")
+        return v
     else:
-        raise RuntimeError("cannot encode type {}".format(type(val)))
+        raise ValueError("cannot encode type {}".format(type(val)))
 
 class Repr:
     def __init__(self, binary_string, type_):
@@ -284,6 +328,9 @@ class Repr:
         
     
     def value(self, type_=None):
+        return self
+    
+    def _value(self, type_=None):
         binary_string = self.binary_string
         type_ = self._guess_type(type_)
         if type_ == 'bytes':
@@ -304,7 +351,7 @@ class Repr:
     def __repr__(self):
         binary_string = self.binary_string
         type_ = self._guess_type()
-        val = self.value()
+        val = self._value()
         if type_ in ('bytes', 'str', 'ip') or type_.startswith('int'):
             return repr(val)
         elif type_ == 'bin':
@@ -314,15 +361,48 @@ class Repr:
         else:
             raise ValueError(f"Unknown type {type_}")
 
-    def __eq__(self, other):
+    @staticmethod
+    def __get_eq_type(other):
         other_type = None
         if isinstance(other, int):
             other_type = 'int'
         elif isinstance(other, str):
             other_type = 'str'
+        elif isinstance(other, bytearray) or isinstance(other, bytes):
+            other_type = 'bytes'
         else:
             raise ValueError("type not defined")
-        return self.value(other_type) == other
+        return other_type
+
+    def __eq__(self, other):
+        other_type = Repr.__get_eq_type(other)
+        return self._value(other_type) == other
+    
+    def __add__(self, other):
+        if isinstance(other, Repr):
+            if self.type_ is None or other.type_ is None or self.type_ == other.type_:
+                return Repr(self.binary_string + other.binary_string, type_=self.type_ or other.type_)
+            raise RuntimeError("unable to add reprs with differnet types")
+        else:
+            return self._value(Repr.__get_eq_type(other)) + other
+    
+    def __mul__(self, other):
+        return self._value(Repr.__get_eq_type(other)) * other
+    
+    def split(self, *args, **kwargs):
+        return self._value().split(*args, **kwargs)
+    
+    def __iter__(self):
+        for c in self._value('bytes'):
+            yield c
+
+    def __len__(self):
+        if len(self.binary_string) % 8 != 0:
+            raise ValueError("length not defind for partial bytes")
+        return len(self.binary_string) // 8
+    
+    def __getitem__(self, item):
+        return self._value('bytes')[item]
 
 def decode(binary_string, type_):
     return Repr(binary_string, type_)
@@ -341,17 +421,17 @@ def evaluate(tree, context, **kwargs):
         res1 = None
         res2 = None
         try:
-            res1 = evaluate(tree[2], context, **kwargs)
+            res1 = evaluate(tree[1], context, **kwargs)
         except Exception as e:
             pass
         try:
-            res2 = evaluate(tree[1], context, **kwargs)
+            res2 = evaluate(tree[2], context, **kwargs)
         except Exception as e:
             pass
         if res1 is None and res2 is None:
-            raise RuntimeError("input doesn't not match any field in root")
+            raise ValueError("input doesn't not match any field in root")
         # elif res1 is not None and res2 is not None:
-            # raise RuntimeError("input matches both fields in root")
+            # raise ValueError("input matches both fields in root")
         elif res1 is not None:
             return res1
         else:
@@ -371,7 +451,7 @@ def evaluate(tree, context, **kwargs):
             if size_option[2] is not None:
                 if name is not None:
                     if name in context and decode(encode(context[name], size), 'int').value() != size_option[2]:
-                        raise RuntimeError("value {} does not match {}".format(
+                        raise ValueError("value {} does not match {}".format(
                             decode(encode(context[name], size), 'int').value(),
                             size_option[2],
                         ))
@@ -389,11 +469,17 @@ def evaluate(tree, context, **kwargs):
             else:
                 should_update_size = True
         
+        if name is None:
+            inner_ctx = context
+        elif context is None:
+            inner_ctx = context
+        else:
+            inner_ctx = context.get(name, None)
+        if name in mappings:
+            inner_ctx = get_mapping(mappings[name], k=inner_ctx)
         if tree[0] == 'field':
             if value is None:
-                value = context[name]
-                if name in mappings:
-                    value = get_mapping(mappings[name], k=value)
+                value = inner_ctx
             size = size or actual_size
             res1 = encode(value, size, type_)
             if should_update_size:
@@ -402,7 +488,7 @@ def evaluate(tree, context, **kwargs):
                 return res1 + encode(size_option[1].encode('utf-8').decode('unicode-escape').encode('utf-8'), None)
             return res1    
         elif tree[0] == 'len_field':
-            value = context[name]
+            value = inner_ctx
             res1 = encode(value, actual_size, type_)
             if should_update_size:
                 context[size_option[1]] = len(res1) / 8
@@ -414,8 +500,10 @@ def evaluate(tree, context, **kwargs):
                 return res1
         elif tree[0] == 'grouped':
             content = tree[4]
-            inner_ctx = context[name] if name is not None else context
-            res1 = evaluate(tree[4], inner_ctx, **kwargs)
+            if inner_ctx is not None:
+                res1 = evaluate(tree[4], inner_ctx, **kwargs)
+            else:
+                res1 = b''
             if should_update_size:
                 context[size_option[1]] = len(res1) / 8
             if size_option[0] == 'literal':
@@ -428,26 +516,40 @@ def evaluate(tree, context, **kwargs):
         repetition, content = tree[1], tree[2]
         assert content[0] in ('field', 'grouped', 'len_field'), "unable to handle repetition"
         name = content[2]
-        if repetition is not None and repetition in context:
-            if context[repetition] == 0 and name not in context:
-                context[name] = []
-            elif context[repetition] != len(context[name]):
-                raise RuntimeError("repetition doesn't equal input list")
+        if isinstance(context, list):
+            val = context
         else:
-            context[repetition] = len(context[name])
-        return b''.join(evaluate(content, {name: context[name][i]}, **kwargs) for i in range(len(context[name])))
+            if name is None:
+                if content[0] == 'grouped' and content[4][0] in ('field', 'grouped', 'len_field'):
+                    name = content[4][2]
+                else:
+                    raise ValueError("unable to get name of repetition")
+            if name in context:
+                val = context[name]
+            else:
+                if repetition is not None and repetition in context and context[repetition] == 0:
+                    val = []
+                else:
+                    raise RuntimeError("unable to get stuff")
+        if repetition is not None and repetition in context:
+            if context[repetition] != len(val):
+                raise ValueError("repetition doesn't equal input list")
+        elif isinstance(context, dict):
+            context[repetition] = len(val)
+        if name is not None:
+            return b''.join(evaluate(content, {name: val[i]}, **kwargs) for i in range(len(val)))
+        else:
+            return b''.join(evaluate(content, val[i], **kwargs) for i in range(len(val)))
     else:
-        raise ValueError(f"Unknown tree node {tree[0]}")
+        raise RuntimeError(f"Unknown tree node {tree[0]}")
 
 def bin_index(data, substr):
     for i in range(0, len(data), 8):
         if data[i:i+len(substr)] == substr:
             return i
-    raise RuntimeError("Substring not found")
+    raise ValueError("substring not found")
 
 def deevaluate(tree, data, curr={}, **kwargs):
-    if isinstance(data, Repr):
-        raise RuntimeError("unknown")
     orig_data = data
     context = {}
     mappings = kwargs.get('mappings', {})
@@ -464,9 +566,9 @@ def deevaluate(tree, data, curr={}, **kwargs):
             pass
 
         if res1 is None and res2 is None:
-            raise RuntimeError("input doesn't not match any field in root")
+            raise ValueError("input doesn't not match any field in root")
         # elif res1 is not None and res2 is not None:
-            # raise RuntimeError("input matches both fields in root")
+            # raise ValueError("input matches both fields in root")
         elif res1 is not None:
             context.update(res1)
             return context, data1
@@ -492,7 +594,7 @@ def deevaluate(tree, data, curr={}, **kwargs):
             data = data[size:]
             if size_option[2] is not None:
                 if res.value('int') != size_option[2]:
-                    raise RuntimeError("value {} does not match {}".format(
+                    raise ValueError("value {} does not match {}".format(
                         res.value('int'),
                         size_option[2],
                     ))
@@ -523,14 +625,19 @@ def deevaluate(tree, data, curr={}, **kwargs):
             return context, data
         elif tree[0] == 'grouped':
             assert type_ is None, "cannot have type of a group"
-            inner_context, should_be_empty = deevaluate(tree[4], res.value('bin'), curr=context, **kwargs)
-            if name is None:
-                context.update(inner_context)
+            if len(res.binary_string) == 0:
+                inner_context = None
             else:
-                context[name] = inner_context
+                inner_context, remaining = deevaluate(tree[4], res.binary_string, curr=context, **kwargs)
+                if size_option[0] != 'rest':
+                    assert not remaining, "remaining when evaluating"
+            if (len(res.binary_string) == 0 and kwargs.get('verbose', False)) or (len(res.binary_string) != 0):
+                if name is None:
+                    context.update(inner_context)
+                else:
+                    context[name] = inner_context
             if size_option[0] == 'rest':
-                return context, should_be_empty
-            assert not should_be_empty, "remaining when evaluating"
+                return context, remaining
             return context, data
     elif tree[0] == 'repetition':
         repetition, content = tree[1], tree[2]
@@ -548,7 +655,7 @@ def deevaluate(tree, data, curr={}, **kwargs):
             res, data = deevaluate(content, data, curr=context, **kwargs)
             keys = list(res.keys())
             if len(keys) != 1:
-                raise RuntimeError("more than one key exists in repetition")
+                raise ValueError("more than one key exists in repetition")
             key = keys[0]
             if key not in context:
                 context[key] = []
@@ -556,10 +663,12 @@ def deevaluate(tree, data, curr={}, **kwargs):
             if count is not None and len(context[key]) == count:
                 break
             if data == last_data:
-                raise RuntimeError("infinite loop decoding a list")
+                raise ValueError("infinite loop decoding a list")
+        if isinstance(context, dict) and list(context.keys()) == [None]:
+            context = context[None]
         return context, data
     else:
-        raise ValueError(f"Unknown tree node {tree[0]}")
+        raise RuntimeError(f"Unknown tree node {tree[0]}")
 
 
 def construct(expression, context, **kwargs):
@@ -573,11 +682,14 @@ def match(expression, data, **kwargs):
     binary_string = ''.join('{v:08b}'.format(v=v) for v in data)
     res, rem = deevaluate(parse_tree, binary_string, **kwargs)
     if len(rem) % 8 != 0:
-        print(rem)
-        raise ValueError("Remaining has to be a multiple of bytes")
+        raise ValueError("remaining has to be a multiple of bytes")
     return res, bytes(int(rem[i:i+8], 2) for i in range(0, len(rem), 8))
 
-
+def match_exact(expression, data, **kwargs):
+    res, rem = match(expression, data, **kwargs)
+    if len(rem) != 0:
+        raise ValueError("match exact returned data")
+    return res
 
 # In[12]:
 
@@ -588,6 +700,7 @@ def tests1():
         "1@a-2@b[int]-3@c[int]-4@d[int]-6@e[int]",
         "{'a': 0b1, 'b': 3, 'c': 6, 'd': 14, 'e': 60}",
         bytes.fromhex(hex(0b1111101110111100)[2:]),
+        should_raise=True,
     )
     expect(
         "binary data reversed",
@@ -605,7 +718,7 @@ def tests1():
         "input int doesn't fit",
         "1@a[bin]-2@b[bin]-3@c[bin]-4@d[hex]-6@e[int]",
         '{"a": 0b1, "b": 0b11, "c": 0b110, "d": 0xe, "e": 250}',
-        RuntimeError("number 250 doesn't fit into 6 bits"),
+        ValueError("number 250 doesn't fit into 6 bits"),
     )
     expect(
         "multiple bytes string",
@@ -635,13 +748,13 @@ def tests1():
         "multiple bytes string, bigger input",
         "2B@f[str]-3B@g[str]",
         '{"f": "ma", "g": "plea"}',
-        RuntimeError("string 'plea' doesn't fit into 3 bytes"),
+        ValueError("string 'plea' doesn't fit into 3 bytes"),
     )
     expect(
         "multiple bytes string, smaller input",
         "2B@f[str]-3B@g[str]",
         '{"f": "ma", "g": "pl"}',
-        RuntimeError("string 'pl' doesn't fit into 3 bytes"),
+        ValueError("string 'pl' doesn't fit into 3 bytes"),
     )
     
     expect(
@@ -670,7 +783,7 @@ def tests1():
         "fail with invalid reference str length",
         "2B@str_len-2B@f[str]-{str_len}@h[str]()-3B@g[str]",
         '{"str_len": 5, "f": "ma", "h": "rrrr", "g": "ple"}',
-        RuntimeError("string 'rrrr' doesn't fit into 5 bytes"),
+        ValueError("string 'rrrr' doesn't fit into 5 bytes"),
     )
     expect(
         "variable input string, reference length, typed",
@@ -678,6 +791,7 @@ def tests1():
         "{'str_len': 4, 'f': 'ma', 'h': 'rrrr', 'g': 'ple'}",
         b"\0\x04marrrrple",
         verbose=True,
+        should_raise=True,
     )
     
     
@@ -769,12 +883,12 @@ def tests1():
         "constant hex, named, invalid, construct",
         r"2B@f[str]-1B==0x8@m[bin]-3B@g[str]",
         r"{'f': 'ma', 'm': b'\x09', 'g': 'ple'}",
-        RuntimeError("value 9 does not match 8"),
+        ValueError("value 9 does not match 8"),
     )
     expect(
         "constant hex, named, invalid, match",
         r"2B@f[str]-1B==0x8@m[bin]-3B@g[str]",
-        RuntimeError("value 9 does not match 8"),
+        ValueError("value 0b00001001 does not match 8"),
         b"ma\x09ple",
     )
     
@@ -798,6 +912,7 @@ def tests1():
         r"2B@f[str]-32@h[ip]-3B@g[str]",
         "{'f': 'ma', 'h': '172.217.23.196', 'g': 'ple'}",
         b"ma\xac\xd9\x17\xc4ple",
+        should_raise=True,
     )
     
     expect(
@@ -888,7 +1003,7 @@ def tests1():
         "or, match both, unnamed",
         r"8==1-2B@f[str]|8==2-2B@f[str]",
         "{'f': 'ma'}",
-        RuntimeError("input matches both fields in root"),
+        b'\x01ma',
     )
     expect(
         "or, nammed",
@@ -899,7 +1014,7 @@ def tests1():
     expect(
         "or, nammed, no match",
         r"8==1@selector-2B@f[str]|8==2@selector-2B@f[str]",
-        RuntimeError("input doesn't not match any field in root"),
+        ValueError("input doesn't not match any field in root"),
         b"\x03a",
     )
 
@@ -978,12 +1093,12 @@ def tests3():
         "or, no match",
         r"8==1@selector-2B@f[str]|8==2@selector-2B@f[str]",
         "{'selector': 3, 'f': 'ma'}",
-        RuntimeError("input doesn't not match any field in root"),
+        ValueError("input doesn't not match any field in root"),
     )
     expect(
-        "or, no match, decode",
-        r"8==2@selector-2B@f[str]|8==2@selector-2B@g[str]",
-        RuntimeError("input matches both fields in root"),
+        "or, match both, decode",
+        r"8==2@selector-2B@f[str]|8==2@selector-2B@f[str]",
+        r"{'selector': 2, 'f': 'ma'}",
         b"\x02ma",
     )
     
@@ -1037,7 +1152,7 @@ def tests3():
         "repetition count, verbose, wrong",
         r"1B@k-2B@f[str]-{k}...~\0@h(2B@i[str]-3b@j[hex])-3B@g[str]",
         "{'k': 3, 'f': 'ma', 'h': [{'i': 'rr', 'j': 0x120a21}, {'i': 'aq', 'j': 0x111111}] , 'g': 'ple'}",
-        RuntimeError("repetition doesn't equal input list"),
+        ValueError("repetition doesn't equal input list"),
         verbose=True,
     )
     
@@ -1045,7 +1160,7 @@ def tests3():
         "repetition count, verbose, wrong",
         r"1B@k-2B@f[str]-{k}...~\0@h(2B@i[str]-3b@j[hex])-3B@g[str]",
         "{'k': 3, 'f': 'ma', 'h': [{'i': 'rr', 'j': 0x120a21}, {'i': 'aq', 'j': 0x111111}] , 'g': 'ple'}",
-        RuntimeError("repetition doesn't equal input list"),
+        ValueError("repetition doesn't equal input list"),
         verbose=True,
     )
     
@@ -1075,6 +1190,131 @@ def tests3():
         should_raise=True,
     )
 
+    expect(
+        "repetition, zero size",
+        r"2b@a[int]-{a}...(2b@b[int])-2b@c[int]",
+        "{'a': 0, 'c': 2}",
+        b'\0\0\0\x02',
+        verbose=True,
+    )
+    expect(
+        "repetition, more than one key, encode",
+        r"...(2b@b[int]-2b@c[int])",
+        ValueError('more than one key exists in repetition'),
+        b'\0\0\0\x02',
+        verbose=True,
+    )
+    expect(
+        "repetition, more than one key, decode",
+        r"...(2b@b[int]-2b@c[int])",
+        b"{'b': 0, 'c': 2}",
+        ValueError('unable to get name of repetition'),
+        verbose=True,
+    )
+
+    expect(
+        "repetition, more than one key, decode",
+        r"...(2b@c[int])",
+        "{'c': [2]}",
+        b'\0\x02',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "repetition, infinite-loop",
+        r"...(0@b[int])-2b@c[int]",
+        ValueError('infinite loop decoding a list'),
+        b'\0\x02',
+        verbose=True,
+    )
+    expect(
+        "repetition, invalid remaining",
+        r"6@a[bin]",
+        ValueError('remaining has to be a multiple of bytes'),
+        b'\0\x02',
+        verbose=True,
+    )
+    expect(
+        "substring not found",
+        r"~\0@a[str]",
+        ValueError("substring not found"),
+        b'asd',
+        verbose=True,
+    )
+    expect(
+        "repetition, unnamed",
+        r"...8[str]()",
+        "['asd', 'eaf']",
+        b'\x03asd\x03eaf',
+        verbose=True,
+    )
+    expect(
+        "repetition, groupped",
+        r"...8@a(1b@b[int]-@c[str])",
+        "{'a': [{'b': 1, 'c': 'mie'}, {'b': 2, 'c': 'm'}]}",
+        b'\x04\x01mie\x02\x02m',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "grouped, non empty",
+        r"8@a(8@c[int])-8@b[int]",
+        "{'a': {'c': 3}, 'b': 2}",
+        b'\x01\x03\x02',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "grouped, empty",
+        r"8@a(8@c[int])-8@b[int]",
+        "{'b': 2}",
+        b'\0\x02',
+    )
+    expect(
+        "grouped, empty, verbose",
+        r"8@a(8@c[int])-8@b[int]",
+        "{'a': None, 'b': 2}",
+        b'\0\x02',
+        verbose=True,
+        should_raise=True,
+    )
+
+    expect(
+        "newline",
+        r"""8@a[int]-
+        -8@b[int]""",
+        "{'a': 2, 'b': 2}",
+        b'\x02\x02',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "newline, comment at end of line",
+        r"""8@a[int] # this is a comment
+        -8@b[int]""",
+        "{'a': 2, 'b': 2}",
+        b'\x02\x02',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "newline, comment on line",
+        r"""8@a[int]
+        # this is a comment
+        -8@b[int]""",
+        "{'a': 2, 'b': 2}",
+        b'\x02\x02',
+        verbose=True,
+        should_raise=True,
+    )
+    expect(
+        "groups, partial bytes",
+        r"1==1@a[int]-(2@b[int]-(5@c[int]))",
+        "{'a': 1, 'b': 2, 'c': 5}",
+        bytes.fromhex(hex(0b11000101)[2:]),
+        should_raise=True,
+    )
+
 def tests():
     tests1()
     tests2()
@@ -1082,3 +1322,8 @@ def tests():
 
 if __name__ == "__main__":
     tests()
+    if failed_any:
+        print("\x1b[37m\x1b[41msome tests failed\x1b[0m")
+        exit(1)
+    else:
+        print("\x1b[37m\x1b[42mall tests succeeded\x1b[0m")
